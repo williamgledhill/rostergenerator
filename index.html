@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Roster App — React (portable)</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body{font-family:Poppins,system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+  </style>
+</head>
+<body class="bg-white text-black">
+  <div id="root"></div>
+
+  <!-- React 18 + Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- App (JSX via Babel Standalone; no TypeScript) -->
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    // ---- Time helpers ----
+    const DAY_START_MIN = 9 * 60 + 30; // 09:30
+    const TOTAL_ROWS = 26; // 09:30..16:00 in 15m slots
+    const toRow = (hhmm) => {
+      const [h, m] = hhmm.split(":").map(Number);
+      const mins = h * 60 + m;
+      return Math.max(0, Math.min(TOTAL_ROWS, Math.floor((mins - DAY_START_MIN) / 15)));
+    };
+    const rowToTime = (row) => {
+      const mins = DAY_START_MIN + row * 15;
+      const h = String(Math.floor(mins / 60)).padStart(2, "0");
+      const m = String(mins % 60).padStart(2, "0");
+      return \`\${h}:\${m}\`;
+    };
+    const rowRangeLabel = (start, end) => \`\${rowToTime(start)}-\${rowToTime(end)}\`;
+
+    // ---- Styling helpers ----
+    const COLORS = {
+      front: "#FFEB3B",
+      gallery: "#A5D6A7",
+      break: "#E1BEE7",
+      prep: "#90CAF9",
+      tour: "#90CAF9",
+      tidy: "#FFCC80",
+      "school-pre": "#90CAF9",
+      "school-program": "#90CAF9",
+    };
+
+    const TYPE_LABEL = {
+      front: "Front Desk",
+      gallery: "Gallery",
+      break: "Break",
+      prep: "Prep",
+      tour: "Public Tour",
+      tidy: "Finish",
+      "school-pre": "School Pre",
+      "school-program": "School Program",
+    };
+
+    const isTourLike = (t) => t === "tour" || t === "school-program";
+
+    // ---- ID helper ----
+    let seq = 0;
+    const uid = () => \`t_\${++seq}\`;
+
+    function RosterApp(){
+      const [employees, setEmployees] = useState([
+        { id: "e_john", name: "John",   shiftStart: toRow("09:30"), shiftEnd: toRow("16:00") },
+        { id: "e_robert", name: "Robert", shiftStart: toRow("09:45"), shiftEnd: toRow("16:00") },
+        { id: "e_mary", name: "Mary",    shiftStart: toRow("10:00"), shiftEnd: toRow("16:00") },
+      ]);
+
+      const [tasks, setTasks] = useState([
+        { id: uid(), empId: "e_john", type: "front",   label: TYPE_LABEL.front,   start: 0, end: 1 },
+        { id: uid(), empId: "e_john", type: "gallery", label: TYPE_LABEL.gallery, start: 1, end: 3 },
+      ]);
+
+      const [selectedId, setSelectedId] = useState(null);
+      const gridRef = useRef(null);
+      const [rowH, setRowH] = useState(44);
+      const [showTypePicker, setShowTypePicker] = useState({ open: false });
+      const [showManage, setShowManage] = useState(false);
+      const [modal, setModal] = useState(null);
+      const [modalName, setModalName] = useState("");
+      const [modalHours, setModalHours] = useState("");
+
+      // measure row height from a rendered time cell
+      useEffect(() => {
+        const el = gridRef.current?.querySelector('[data-kind="time-cell"][data-row="0"]');
+        if (el) setRowH(el.getBoundingClientRect().height || 44);
+      }, [employees.length]);
+
+      // Keyboard delete/backspace to remove selected
+      useEffect(() => {
+        const onKey = (e) => {
+          if (e.key === "Delete" || e.key === "Backspace") {
+            if (selectedId) {
+              setTasks((prev) => prev.filter((t) => t.id !== selectedId));
+              setSelectedId(null);
+            }
+          }
+          if (e.key === "Escape") setSelectedId(null);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [selectedId]);
+
+      // Shortcuts while a modal is open
+      useEffect(() => {
+        if (!modal) return;
+        const onK = (e) => {
+          if (e.key === 'Enter') commitModal();
+          if (e.key === 'Escape') cancelModal();
+        };
+        window.addEventListener('keydown', onK);
+        return () => window.removeEventListener('keydown', onK);
+      }, [modal, modalName, modalHours]);
+
+      // Close pickers with Escape
+      useEffect(() => {
+        const onEsc = (e) => {
+          if (e.key === 'Escape') {
+            setShowTypePicker({ open: false });
+            setShowManage(false);
+          }
+        };
+        window.addEventListener('keydown', onEsc);
+        return () => window.removeEventListener('keydown', onEsc);
+      }, []);
+
+      // ---- Helpers to query tasks per employee ----
+      const byEmp = useMemo(() => {
+        const map = {};
+        for (const e of employees) map[e.id] = [];
+        for (const t of tasks) (map[t.empId] ||= []).push(t);
+        for (const id in map) map[id].sort((a, b) => a.start - b.start);
+        return map;
+      }, [employees, tasks]);
+
+      const mergeAdjacent = (empId) => {
+        setTasks((prev) => {
+          const arr = [...prev].filter((t) => t.empId === empId).sort((a,b)=>a.start-b.start);
+          const keep = [];
+          for (const t of arr) {
+            const last = keep[keep.length - 1];
+            const sameKind = last && last.type === t.type && last.label === t.label && last.end === t.start && !isTourLike(t.type) && !isTourLike(last.type);
+            if (sameKind) last.end = t.end; else keep.push({...t});
+          }
+          const others = prev.filter((t) => t.empId !== empId);
+          return [...others, ...keep];
+        });
+      };
+
+      const resolveOverlaps = (empId, start, end, exceptId) => {
+        setTasks((prev) => {
+          const next = [];
+          for (const t of prev) {
+            if (t.empId !== empId || t.id === exceptId) { next.push(t); continue; }
+            if (t.end <= start || t.start >= end) { next.push(t); continue; }
+            if (t.start >= start && t.end <= end) continue;
+            if (t.start < start && t.end <= end) { next.push({...t, end: start}); continue; }
+            if (t.start >= start && t.end > end) { next.push({...t, start: end}); continue; }
+            if (t.start < start && t.end > end) { next.push({...t, end: start}); next.push({...t, start: end}); continue; }
+          }
+          return next;
+        });
+      };
+
+      const addTaskAt = (empId, row, type) => {
+        const label = TYPE_LABEL[type];
+        const newTask = { id: uid(), empId, type, label, start: row, end: row + 1 };
+        resolveOverlaps(empId, row, row + 1);
+        setTasks((prev) => [...prev, newTask]);
+        if (!isTourLike(type)) mergeAdjacent(empId);
+        setSelectedId(newTask.id);
+      };
+
+      // ---- Drag resizing ----
+      const dragInfo = useRef(null);
+      const onHandleMouseDown = (e, id, empId, which) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const t = tasks.find((x) => x.id === id);
+        if (!t) return;
+        dragInfo.current = { id, empId, which, startStart: t.start, startEnd: t.end, y0: e.clientY };
+        window.addEventListener("mousemove", onDragMove);
+        window.addEventListener("mouseup", onDragEnd, { once: true });
+      };
+      const onDragMove = (e) => {
+        const di = dragInfo.current; if (!di) return;
+        const dy = e.clientY - di.y0;
+        const deltaRows = Math.round(dy / rowH);
+        setTasks((prev) =>
+          prev.map((t) => {
+            if (t.id !== di.id) return t;
+            let start = di.startStart;
+            let end = di.startEnd;
+            if (di.which === "top") {
+              start = Math.max(0, Math.min(end - 1, di.startStart + deltaRows));
+            } else {
+              end = Math.min(TOTAL_ROWS, Math.max(start + 1, di.startEnd + deltaRows));
+            }
+            return { ...t, start, end };
+          })
+        );
+      };
+      const onDragEnd = () => {
+        const di = dragInfo.current; if (!di) return;
+        const me = tasks.find((t) => t.id === di.id);
+        if (me) {
+          resolveOverlaps(me.empId, me.start, me.end, me.id);
+          if (!isTourLike(me.type)) mergeAdjacent(me.empId);
+        }
+        dragInfo.current = null;
+        window.removeEventListener("mousemove", onDragMove);
+      };
+
+      // ---- CSV Export ----
+      const exportCSV = () => {
+        const header = ["Time", ...employees.map((e) => e.name)];
+        const rows = [header];
+        const textAt = (empId, row) => {
+          const t = (byEmp[empId] || []).find((x) => row >= x.start && row < x.end);
+          return t ? t.label : "";
+        };
+        for (let r = 0; r < TOTAL_ROWS; r++) rows.push([rowRangeLabel(r, r + 1), ...employees.map((e) => textAt(e.id, r))]);
+        const csv = rows.map(cols => cols.map(c => {
+          let s = String(c);
+          if (s.includes('"')) s = s.split('"').join('""');
+          if (s.includes(",") || s.includes("\n") || s.includes('"')) s = '"' + s + '"';
+          return s;
+        }).join(",")).join("\n");
+        try {
+          const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "roster.csv"; a.style.display="none";
+          document.body.appendChild(a); a.click();
+          setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+        } catch (err) {
+          const fallback = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+          window.open(fallback, "_blank");
+        }
+      };
+
+      // ---- Autogenerate ----
+      const autogenerate = () => {
+        const TOUR_TIMES = ["11:00", "11:30", "13:00", "14:00"];
+        let nextTasks = [];
+        const staff = employees.map((e) => ({
+          e, start: e.shiftStart, end: e.shiftEnd, lastTourEnd: -999, tourCount: 0, slots: new Array(TOTAL_ROWS), labels: new Array(TOTAL_ROWS),
+        }));
+        const canPlaceTour = (s, startRow) => {
+          if (!(startRow - 1 >= s.start && startRow + 3 <= s.end)) return false;
+          for (let r = startRow - 1; r < startRow + 3; r++) if (s.slots[r]) return false;
+          if (s.lastTourEnd >= startRow - 1) return false;
+          return true;
+        };
+        const placeTour = (s, row, label) => {
+          s.slots[row - 1] = "prep"; s.labels[row - 1] = \`Prep (\${rowToTime(row)})\`;
+          for (let r = row; r < row + 3; r++) { s.slots[r] = "tour"; s.labels[r] = \`Public Tour (\${rowToTime(row)})\`; }
+          s.tourCount++; s.lastTourEnd = row + 3;
+        };
+        for (const t of TOUR_TIMES) {
+          const r = toRow(t);
+          let cands = staff.filter((s) => canPlaceTour(s, r)).sort((a, b) => a.tourCount - b.tourCount || a.start - b.start);
+          if (!cands.length) cands = staff.filter((s) => r - 1 >= s.start && r + 3 <= s.end).sort((a, b) => a.tourCount - b.tourCount);
+          const chosen = cands[0] || staff[0];
+          placeTour(chosen, r, \`Public Tour (\${t})\`);
+        }
+        for (const s of staff) {
+          const mid = Math.floor((s.start + s.end - 1) / 2);
+          const ok = (r) => r >= s.start && r + 1 < s.end && !s.slots[r] && !s.slots[r + 1];
+          let pick = null;
+          for (let d = 0; d < 6; d++) {
+            const a = mid - d, b = mid + d;
+            if (ok(a)) { pick = a; break; }
+            if (ok(b)) { pick = b; break; }
+          }
+          if (pick != null) { s.slots[pick] = s.slots[pick + 1] = "break"; s.labels[pick] = s.labels[pick + 1] = "Break"; }
+        }
+        const frontCount = Object.fromEntries(employees.map((e) => [e.id, 0]));
+        for (let r = 0; r < TOTAL_ROWS; r++) {
+          const hasFront = staff.some((s) => s.slots[r] === "front");
+          if (!hasFront) {
+            const avail = staff.filter((s) => r >= s.start && r < s.end && !["tour","prep","break"].includes(s.slots[r] || ""));
+            if (avail.length) {
+              avail.sort((a, b) => (frontCount[a.e.id] || 0) - (frontCount[b.e.id] || 0));
+              const ch = avail[0]; ch.slots[r] = "front"; ch.labels[r] = TYPE_LABEL.front;
+              frontCount[ch.e.id] = (frontCount[ch.e.id] || 0) + 1;
+            }
+          }
+        }
+        for (const s of staff) for (let r = s.start; r < s.end; r++) if (!s.slots[r]) { s.slots[r] = "gallery"; s.labels[r] = TYPE_LABEL.gallery; }
+        for (const s of staff) {
+          let r = s.start;
+          while (r < s.end) {
+            const tp = s.slots[r] || "gallery";
+            const label = s.labels[r] || TYPE_LABEL[tp];
+            let span = 1;
+            const lock = isTourLike(tp) ? label : null;
+            while (r + span < s.end && s.slots[r + span] === tp && (lock ? s.labels[r + span] === lock : true)) span++;
+            nextTasks.push({ id: uid(), empId: s.e.id, type: tp, label, start: r, end: r + span });
+            r += span;
+          }
+        }
+        setTasks(nextTasks);
+      };
+
+      // ---- Column management ----
+      const addEmployee = () => {
+        setModal({kind:'add'});
+        setModalName(\`Employee \${employees.length + 1}\`);
+        setModalHours('10:00-16:00');
+      };
+      const deleteEmployee = (empId, name) => {
+        setModal({kind:'delete', empId});
+        setModalName(name);
+      };
+
+      // ---- Shift editing helpers ----
+      const parseSingleTime = (s) => {
+        const m = (s || '').trim().match(/^(\d{1,2})(?::?(\d{2}))?$/);
+        if (!m) return null;
+        const h = parseInt(m[1], 10);
+        const mm = m[2] ? parseInt(m[2], 10) : 0;
+        if (isNaN(h) || isNaN(mm) || h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+        const mins = h * 60 + mm;
+        const row = Math.floor((mins - DAY_START_MIN) / 15);
+        return Math.max(0, Math.min(TOTAL_ROWS, row));
+      };
+      const parseRange = (s) => {
+        if (!s) return null;
+        const parts = s.split('-');
+        if (parts.length !== 2) return null;
+        const a = parseSingleTime(parts[0]);
+        const b = parseSingleTime(parts[1]);
+        if (a == null || b == null || a >= b) return null;
+        return { start: a, end: b };
+      };
+      const updateShift = (empId, startRow, endRow) => {
+        setEmployees(prev => prev.map(e => e.id === empId ? { ...e, shiftStart: startRow, shiftEnd: endRow } : e));
+        setTasks(prev => {
+          const out = [];
+          for (const t of prev) {
+            if (t.empId !== empId) { out.push(t); continue; }
+            const s = Math.max(t.start, startRow);
+            const e = Math.min(t.end, endRow);
+            if (e <= s) continue;
+            out.push({ ...t, start: s, end: e });
+          }
+          return out;
+        });
+        mergeAdjacent(empId);
+      };
+
+      const commitModal = () => {
+        if (!modal) return;
+        if (modal.kind === 'add') {
+          const rng = parseRange(modalHours) || { start: toRow('10:00'), end: toRow('16:00') };
+          setEmployees(prev => [...prev, { id: \`e_\${Date.now()}\`, name: (modalName.trim() || \`Employee \${prev.length + 1}\`), shiftStart: rng.start, shiftEnd: rng.end }]);
+          setModal(null);
+          return;
+        }
+        if (modal.kind === 'rename' && modal.empId) {
+          const nm = modalName.trim();
+          if (nm) setEmployees(prev => prev.map(e => e.id === modal.empId ? { ...e, name: nm } : e));
+          setModal(null);
+          return;
+        }
+        if (modal.kind === 'hours' && modal.empId) {
+          const rng = parseRange(modalHours);
+          if (!rng) { alert('Please enter times like 09:45-16:00'); return; }
+          updateShift(modal.empId, rng.start, rng.end);
+          setModal(null);
+          return;
+        }
+        if (modal.kind === 'delete' && modal.empId) {
+          setEmployees(prev => prev.filter(e => e.id !== modal.empId));
+          setTasks(prev => prev.filter(t => t.empId !== modal.empId));
+          setModal(null);
+          return;
+        }
+      };
+      const cancelModal = () => setModal(null);
+
+      // ---- Validation: ensure every row has at least one front desk ----
+      const uncoveredRows = useMemo(() => {
+        const rows = [];
+        for (let r = 0; r < TOTAL_ROWS; r++) {
+          const ok = employees.some((e) => (byEmp[e.id] || []).some((t) => t.type === "front" && r >= t.start && r < t.end));
+          if (!ok) rows.push(r);
+        }
+        return rows;
+      }, [employees, byEmp]);
+
+      const timeRows = Array.from({ length: TOTAL_ROWS }, (_, r) => (
+        <div
+          key={r}
+          data-kind="time-cell"
+          data-row={r}
+          className="border-b border-r border-black bg-white flex items-center px-3 font-semibold select-none"
+          style={{ gridColumn: 1, gridRow: r + 2 }}
+          title={uncoveredRows.includes(r) ? "Front desk uncovered" : undefined}
+        >
+          {rowRangeLabel(r, r + 1)}
+        </div>
+      ));
+
+      const slots = employees.flatMap((e, ci) => {
+        const col = ci + 2;
+        const colTasks = byEmp[e.id] || [];
+        const result = [];
+        for (let r = 0; r < TOTAL_ROWS; r++) {
+          const covered = colTasks.some((t) => r >= t.start && r < t.end);
+          if (!covered) {
+            result.push(
+              <div
+                key={\`slot_\${e.id}_\${r}\`}
+                className="relative border border-black bg-white cursor-pointer group"
+                style={{ gridColumn: col, gridRow: r + 2 }}
+                onClick={() => setShowTypePicker({ open: true, empId: e.id, row: r })}
+                title="Add task"
+              >
+                <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 font-extrabold opacity-0 group-hover:opacity-30 pointer-events-none select-none">+</span>
+              </div>
+            );
+          }
+        }
+        return result;
+      });
+
+      const blocks = tasks.map((t) => {
+        const col = 2 + employees.findIndex((e) => e.id === t.empId);
+        if (col < 2) return null;
+        const selected = t.id === selectedId;
+        return (
+          <div
+            key={t.id}
+            className={\`border border-black text-xs sm:text-[13px] uppercase tracking-wide font-semibold flex items-center justify-center select-none \${selected ? "border-[2px] border-dashed" : ""}\`}
+            style={{ gridColumn: col, gridRow: \`\${t.start + 2} / span \${t.end - t.start}\`, background: COLORS[t.type], position: "relative", zIndex: selected ? 20 : 1 }}
+            onClick={(e) => { e.stopPropagation(); setSelectedId(t.id); }}
+          >
+            <div className="absolute left-0 right-0 h-1 opacity-80 cursor-ns-resize" style={{ top: -1, background: "#000", display: selected ? "block" : "none" }} onMouseDown={(e) => onHandleMouseDown(e, t.id, t.empId, "top")} />
+            <div className="absolute left-0 right-0 h-1 opacity-80 cursor-ns-resize" style={{ bottom: -1, background: "#000", display: selected ? "block" : "none" }} onMouseDown={(e) => onHandleMouseDown(e, t.id, t.empId, "bottom")} />
+            <span className="px-2 text-center leading-tight">{t.label}</span>
+          </div>
+        );
+      });
+
+      return (
+        <div className="min-h-screen bg-white text-black p-4">
+          <style>{\`
+            .grid-outer{ display:grid; grid-template-columns: 160px repeat(\${employees.length}, 1fr); grid-auto-rows: 44px; }
+            .cell-head{ display:flex; align-items:center; padding:10px 12px; font-weight:800; text-transform:uppercase; border-right:1px solid #000; border-bottom:1px solid #000; }
+            .col-divider{ border-left:1px solid #000; grid-row:1 / \${TOTAL_ROWS + 2}; pointer-events:none; }
+          \`}</style>
+
+          <div className="flex flex-wrap gap-2 mb-3">
+            <button type="button" className="border border-black px-3 py-2 font-extrabold uppercase" onClick={autogenerate} title="Generate a roster from tours & shifts">Autogenerate</button>
+            <button type="button" className="border border-black px-3 py-2 font-extrabold uppercase" onClick={exportCSV}>Download CSV</button>
+            <button type="button" className="border border-black px-3 py-2 font-extrabold uppercase" onClick={() => { setModal({kind:'add'}); setModalName(\`Employee \${employees.length + 1}\`); setModalHours('10:00-16:00'); }}>Add Employee</button>
+            <button type="button" className="border border-black px-3 py-2 font-extrabold uppercase" onClick={() => setShowManage(true)}>Options</button>
+          </div>
+
+          {uncoveredRows.length > 0 && (
+            <div className="border-2 border-black p-2 font-extrabold uppercase mb-2">
+              Warning: Front Desk uncovered in {uncoveredRows.length} slot{uncoveredRows.length > 1 ? "s" : ""}.
+            </div>
+          )}
+
+          <div ref={gridRef} className="grid-outer border-t border-l border-black bg-white relative select-none" onMouseDown={() => setSelectedId(null)}>
+            <div className="cell-head" style={{ gridColumn: 1, gridRow: 1 }}>Time</div>
+            {employees.map((e, i) => (
+              <div key={e.id} className="cell-head" style={{ gridColumn: i + 2, gridRow: 1 }}>
+                <span className="mr-2">{e.name}</span>
+                <span className="text-xs opacity-70 ml-2">{rowToTime(e.shiftStart)}–{rowToTime(e.shiftEnd)}</span>
+              </div>
+            ))}
+            {timeRows}
+            {slots}
+            {blocks}
+          </div>
+
+          {/* Create Task Modal */}
+          {showTypePicker.open && (
+            <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowTypePicker({ open: false })}>
+              <div className="bg-white border border-black p-3 w-[420px] max-w-[95%]" onClick={(e) => e.stopPropagation()}>
+                <div className="font-extrabold uppercase mb-2">Create Task</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {["front","tour","prep","gallery","break","tidy","school-pre","school-program"].map((t) => (
+                    <button key={t} type="button" className="border border-black px-3 py-2 font-extrabold uppercase" style={{ background: COLORS[t] }}
+                      onClick={() => { if (!showTypePicker.empId || showTypePicker.row == null) return; addTaskAt(showTypePicker.empId, showTypePicker.row, t); setShowTypePicker({ open: false }); }}>
+                      {TYPE_LABEL[t]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* App Modals: Add/Rename/Hours/Delete */}
+          {modal && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]" onClick={() => setModal(null)}>
+              <div className="bg-white border border-black p-4 w-[460px] max-w-[95%]" onClick={(e)=>e.stopPropagation()}>
+                {modal.kind === 'add' && (
+                  <div>
+                    <div className="font-extrabold uppercase mb-2">Add Employee</div>
+                    <label className="block text-xs">Name</label>
+                    <input className="border border-black w-full p-2 mb-3" value={modalName} onChange={(e)=>setModalName(e.target.value)} />
+                    <label className="block text-xs">Hours (HH:MM-HH:MM)</label>
+                    <input className="border border-black w-full p-2 mb-3" value={modalHours} onChange={(e)=>setModalHours(e.target.value)} />
+                    <div className="flex gap-2 justify-end">
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={commitModal}>Save</button>
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={() => setModal(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {modal.kind === 'rename' && (
+                  <div>
+                    <div className="font-extrabold uppercase mb-2">Rename Employee</div>
+                    <label className="block text-xs">Name</label>
+                    <input className="border border-black w-full p-2 mb-3" value={modalName} onChange={(e)=>setModalName(e.target.value)} />
+                    <div className="flex gap-2 justify-end">
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={commitModal}>Save</button>
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={() => setModal(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {modal.kind === 'hours' && (
+                  <div>
+                    <div className="font-extrabold uppercase mb-2">Edit Hours</div>
+                    <label className="block text-xs">Hours (HH:MM-HH:MM)</label>
+                    <input className="border border-black w-full p-2 mb-3" value={modalHours} onChange={(e)=>setModalHours(e.target.value)} />
+                    <div className="flex gap-2 justify-end">
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={commitModal}>Save</button>
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={() => setModal(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {modal.kind === 'delete' && (
+                  <div>
+                    <div className="font-extrabold uppercase mb-2">Delete Column</div>
+                    <div className="mb-3">Are you sure you want to delete <b>{modalName}</b> and all of their tasks?</div>
+                    <div className="flex gap-2 justify-end">
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={commitModal}>Delete</button>
+                      <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase" onClick={() => setModal(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Manage Columns */}
+          {showManage && (
+            <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowManage(false)}>
+              <div className="bg-white border border-black p-3 w-[520px] max-w-[95%]" onClick={(e) => e.stopPropagation()}>
+                <div className="font-extrabold uppercase">Manage Columns</div>
+                <div className="mt-2 flex flex-col gap-2">
+                  {employees.map((e) => (
+                    <div key={e.id} className="border border-black p-2 flex justify-between items-center">
+                      <div className="font-extrabold uppercase flex items-center gap-2">
+                        <span>{e.name}</span>
+                        <span className="text-xs opacity-70">{rowToTime(e.shiftStart)}–{rowToTime(e.shiftEnd)}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase"
+                          onClick={() => { setModal({kind:'hours', empId: e.id}); setModalHours(rowToTime(e.shiftStart)+'-'+rowToTime(e.shiftEnd)); }}>
+                          Hours
+                        </button>
+                        <button type="button" className="border border-black px-3 py-1 font-extrabold uppercase"
+                          onClick={() => deleteEmployee(e.id, e.name)}>
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<RosterApp />);
+  </script>
+</body>
+</html>
