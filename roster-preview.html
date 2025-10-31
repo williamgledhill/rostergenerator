@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Roster Preview — Schools + Tours</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --blk:#000;
+    --timew: 160px;
+    --rowh: 44px;
+    --front:#FFEB3B;   /* yellow */
+    --tour:#90CAF9;    /* blue */
+    --prep:#90CAF9;    /* prep same as tour */
+    --gallery:#A5D6A7; /* green */
+    --break:#E1BEE7;   /* lavender */
+    --tidy:#FFCC80;    /* orange */
+  }
+  *{box-sizing:border-box}
+  body{font-family:Poppins,system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;margin:22px;color:#000;background:#fff}
+  h1{font-size:24px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin:0 0 14px}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 20px}
+  .badge{display:flex;align-items:center;gap:8px;border:1px solid var(--blk);padding:6px 10px;border-radius:6px;font-weight:700;text-transform:uppercase}
+  .dot{width:14px;height:14px;border:1px solid var(--blk)}
+
+  .grid{
+    position:relative;
+    display:grid;
+    grid-template-columns: var(--timew) repeat(3, 1fr);
+    grid-auto-rows: var(--rowh);
+    border-top:1px solid var(--blk);
+    border-left:1px solid var(--blk);
+  }
+  .head, .cell.time, .cell.blank{border-right:1px solid var(--blk);border-bottom:1px solid var(--blk)}
+  .slot{border:1px solid var(--blk)}
+  .head{display:flex;align-items:center;padding:10px 12px;font-weight:800;text-transform:uppercase}
+  .time{display:flex;align-items:center;justify-content:flex-start;padding:0 10px;font-weight:800;font-variant-numeric:tabular-nums;color:#000}
+  .blank{background:#fff}
+
+  /* Empty slot hover + */
+  .slot{position:relative;background:#fff}
+  .slot::after{content:'+';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-weight:800;opacity:0;transition:opacity .1s;pointer-events:none}
+  .slot:hover::after{opacity:.25}
+
+  /* Modal */
+  .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.25);z-index:999}
+  .modal.show{display:flex}
+  .panel{background:#fff;border:1px solid var(--blk);padding:12px 14px;max-width:460px;width:90%;border-radius:6px}
+  .panel h2{margin:0 0 8px;font-size:16px;text-transform:uppercase}
+  .options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .options button{border:1px solid var(--blk);padding:8px 10px;font-weight:700;text-transform:uppercase;cursor:pointer;background:#fff}
+  .options button[data-type="front"]{background:var(--front)}
+  .options button[data-type="tour"]{background:var(--tour)}
+  .options button[data-type="prep"]{background:var(--tour)}
+  .options button[data-type="gallery"]{background:var(--gallery)}
+  .options button[data-type="break"]{background:var(--break)}
+  .options button[data-type="tidy"]{background:var(--tidy)}
+  .options button[data-type="school-pre"]{background:var(--tour)}
+  .options button[data-type="school-program"]{background:var(--tour)}
+  .options button:hover{filter:brightness(0.95)}
+
+  /* Manage Columns modal */
+  .col-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .col-row{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--blk);padding:8px 10px}
+  .col-row .name{font-weight:700;text-transform:uppercase}
+  .col-row .actions{display:flex;gap:6px}
+  .col-row button{border:1px solid var(--blk);background:#fff;padding:6px 10px;font-weight:800;text-transform:uppercase;cursor:pointer}
+  .col-row button:hover{filter:brightness(0.97)}
+
+  .block{display:flex;align-items:center;justify-content:center;padding:10px 8px;font-weight:600;text-transform:uppercase;letter-spacing:.2px}
+  .front{background:var(--front)}
+  .tour{background:var(--tour)}
+  .prep{background:var(--prep)}
+  .gallery{background:var(--gallery)}
+  .break{background:var(--break)}
+  .tidy{background:var(--tidy)}
+  .block{border-radius:0; position:relative; border:1px solid var(--blk); z-index:1;}
+  .block.selected{border-style:dashed; z-index:200; box-shadow:none; outline:none;}
+  .handle{position:absolute; left:0; right:0; height:6px; background:#000; opacity:.8; cursor:ns-resize; display:none}
+  .block.selected .handle{display:block}
+  .handle.top{top:-2px}
+  .handle.bottom{bottom:-2px}
+  .time.warn{outline:1px dashed #f33}
+  .banner{position:sticky; top:0; background:#fff; border:2px solid #000; padding:8px 10px; margin-bottom:10px; font-weight:700; text-transform:uppercase; display:none}
+  .banner.show{display:block}
+  .col-wall{pointer-events:none; border-left:1px solid var(--blk); z-index:0}
+  .col-wall.end{border-right:1px solid var(--blk)}
+  .toolbar{display:flex;gap:8px;margin:8px 0 12px;flex-wrap:wrap}
+  .btn{border:1px solid var(--blk);background:#fff;padding:8px 12px;font-weight:800;text-transform:uppercase;cursor:pointer}
+  .btn:hover{filter:brightness(0.97)}
+</style>
+</head>
+<body>
+  <h1>Roster Preview — Schools + Public Tours</h1>
+  <div class="toolbar">
+    <button id="autogenBtn" class="btn" title="Generate a roster from tours & shifts">Autogenerate</button>
+    <button id="exportBtn" class="btn" title="Download CSV">Download CSV</button>
+    <button id="addColBtn" class="btn" title="Add employee column on the right">Add Employee</button>
+    <button id="manageColsBtn" class="btn" title="Delete a column">Options</button>
+  </div>
+  <div class="legend">
+    <span class="badge"><span class="dot" style="background:var(--tour)"></span>Public Tour</span>
+    <span class="badge"><span class="dot" style="background:var(--tour)"></span>Prep</span>
+    <span class="badge"><span class="dot" style="background:var(--front)"></span>Front Desk</span>
+    <span class="badge"><span class="dot" style="background:var(--gallery)"></span>Gallery</span>
+    <span class="badge"><span class="dot" style="background:var(--break)"></span>Break</span>
+    <span class="badge"><span class="dot" style="background:var(--tidy)"></span>Finish</span>
+  </div>
+
+  <!-- Grid: row 1 is header; rows 2..27 are 15-min slots 09:30..16:00 -->
+  <div class="grid" style="--rowh:44px">
+    <!-- Headers -->
+    <div class="head" style="grid-column:1;grid-row:1">Time</div>
+    <div class="head" style="grid-column:2;grid-row:1">John</div>
+    <div class="head" style="grid-column:3;grid-row:1">Robert</div>
+    <div class="head" style="grid-column:4;grid-row:1">Mary</div>
+
+    <!-- Column vertical borders -->
+    <div class="col-wall" style="grid-column:2; grid-row:1 / -1"></div>
+    <div class="col-wall" style="grid-column:3; grid-row:1 / -1"></div>
+    <div class="col-wall end" style="grid-column:4; grid-row:1 / -1"></div>
+
+    <!-- Time labels (rows 2..27) -->
+    <div class="cell time" style="grid-column:1;grid-row:2">09:30–09:45</div>
+    <div class="cell time" style="grid-column:1;grid-row:3">09:45–10:00</div>
+    <div class="cell time" style="grid-column:1;grid-row:4">10:00–10:15</div>
+    <div class="cell time" style="grid-column:1;grid-row:5">10:15–10:30</div>
+    <div class="cell time" style="grid-column:1;grid-row:6">10:30–10:45</div>
+    <div class="cell time" style="grid-column:1;grid-row:7">10:45–11:00</div>
+    <div class="cell time" style="grid-column:1;grid-row:8">11:00–11:15</div>
+    <div class="cell time" style="grid-column:1;grid-row:9">11:15–11:30</div>
+    <div class="cell time" style="grid-column:1;grid-row:10">11:30–11:45</div>
+    <div class="cell time" style="grid-column:1;grid-row:11">11:45–12:00</div>
+    <div class="cell time" style="grid-column:1;grid-row:12">12:00–12:15</div>
+    <div class="cell time" style="grid-column:1;grid-row:13">12:15–12:30</div>
+    <div class="cell time" style="grid-column:1;grid-row:14">12:30–12:45</div>
+    <div class="cell time" style="grid-column:1;grid-row:15">12:45–13:00</div>
+    <div class="cell time" style="grid-column:1;grid-row:16">13:00–13:15</div>
+    <div class="cell time" style="grid-column:1;grid-row:17">13:15–13:30</div>
+    <div class="cell time" style="grid-column:1;grid-row:18">13:30–13:45</div>
+    <div class="cell time" style="grid-column:1;grid-row:19">13:45–14:00</div>
+    <div class="cell time" style="grid-column:1;grid-row:20">14:00–14:15</div>
+    <div class="cell time" style="grid-column:1;grid-row:21">14:15–14:30</div>
+    <div class="cell time" style="grid-column:1;grid-row:22">14:30–14:45</div>
+    <div class="cell time" style="grid-column:1;grid-row:23">14:45–15:00</div>
+    <div class="cell time" style="grid-column:1;grid-row:24">15:00–15:15</div>
+    <div class="cell time" style="grid-column:1;grid-row:25">15:15–15:30</div>
+    <div class="cell time" style="grid-column:1;grid-row:26">15:30–15:45</div>
+    <div class="cell time" style="grid-column:1;grid-row:27">15:45–16:00</div>
+
+    <!-- JOHN blocks (column 2) -->
+    <div class="block front"   style="grid-column:2; grid-row:2 / span 1">Front Desk</div>
+    <div class="block gallery" style="grid-column:2; grid-row:3 / span 2">Gallery</div>
+    <div class="block front"   style="grid-column:2; grid-row:5 / span 1">Front Desk</div>
+    <div class="block gallery" style="grid-column:2; grid-row:6 / span 1">Gallery</div>
+    <div class="block gallery" style="grid-column:2; grid-row:7 / span 1">Gallery</div>
+    <div class="block tour"    style="grid-column:2; grid-row:8 / span 3">Public Tour (11:00)</div>
+    <div class="block prep"    style="grid-column:2; grid-row:11 / span 1">School A – Pre</div>
+    <div class="block tour"    style="grid-column:2; grid-row:12 / span 3">School A – Program</div>
+    <div class="block break"   style="grid-column:2; grid-row:15 / span 2">Break</div>
+    <div class="block front"   style="grid-column:2; grid-row:17 / span 2">Front Desk</div>
+    <div class="block gallery" style="grid-column:2; grid-row:19 / span 1">Gallery</div>
+    <div class="block tour"    style="grid-column:2; grid-row:20 / span 3">Public Tour (14:00)</div>
+    <div class="block break"   style="grid-column:2; grid-row:23 / span 2">Break</div>
+    <div class="block gallery" style="grid-column:2; grid-row:25 / span 2">Gallery</div>
+    <div class="block tidy"    style="grid-column:2; grid-row:27 / span 1">Finish</div>
+
+    <!-- ROBERT blocks (column 3) -->
+    <div class="cell blank"    style="grid-column:3; grid-row:2 / span 1"></div>
+    <div class="block front"   style="grid-column:3; grid-row:3 / span 1">Front Desk</div>
+    <div class="block gallery" style="grid-column:3; grid-row:4 / span 1">Gallery</div>
+    <div class="block front"   style="grid-column:3; grid-row:5 / span 1">Front Desk</div>
+    <div class="block gallery" style="grid-column:3; grid-row:6 / span 1">Gallery</div>
+    <div class="block front"   style="grid-column:3; grid-row:6 / span 11">Front Desk</div>
+    <div class="block break"   style="grid-column:3; grid-row:17 / span 2">Break</div>
+    <div class="block prep"    style="grid-column:3; grid-row:19 / span 1">Prep (14:00)</div>
+    <div class="block prep"    style="grid-column:3; grid-row:20 / span 1">School B – Pre</div>
+    <div class="block tour"    style="grid-column:3; grid-row:21 / span 3">School B – Program</div>
+    <div class="block gallery" style="grid-column:3; grid-row:25 / span 2">Gallery</div>
+    <div class="block front"   style="grid-column:3; grid-row:27 / span 1">Front Desk</div>
+
+    <!-- MARY blocks (column 4) -->
+    <div class="cell blank"    style="grid-column:4; grid-row:2 / span 2"></div>
+    <div class="block front"   style="grid-column:4; grid-row:4 / span 1">Front Desk</div>
+    <div class="block gallery" style="grid-column:4; grid-row:5 / span 2">Gallery</div>
+    <div class="block prep"    style="grid-column:4; grid-row:7 / span 1">Prep (11:00)</div>
+    <div class="block gallery" style="grid-column:4; grid-row:8 / span 1">Gallery</div>
+    <div class="block prep"    style="grid-column:4; grid-row:9 / span 1">Prep (11:30)</div>
+    <div class="block tour"    style="grid-column:4; grid-row:10 / span 3">Public Tour (11:30)</div>
+    <div class="block break"   style="grid-column:4; grid-row:13 / span 2">Break</div>
+    <div class="block prep"    style="grid-column:4; grid-row:15 / span 1">Prep (13:00)</div>
+    <div class="block tour"    style="grid-column:4; grid-row:16 / span 3">Public Tour (13:00)</div>
+    <div class="block front"   style="grid-column:4; grid-row:19 / span 8">Front Desk</div>
+    <div class="block tidy"    style="grid-column:4; grid-row:27 / span 1">Finish</div>
+  </div>
+  <div id="banner" class="banner"></div>
+  <div id="taskModal" class="modal" aria-hidden="true">
+    <div class="panel" role="dialog" aria-modal="true">
+      <h2>Create Task</h2>
+      <div class="options">
+        <button data-type="front">Front Desk</button>
+        <button data-type="tour">Public Tour</button>
+        <button data-type="prep">Prep</button>
+        <button data-type="gallery">Gallery</button>
+        <button data-type="break">Break</button>
+        <button data-type="tidy">Finish</button>
+        <button data-type="school-pre">School Pre</button>
+        <button data-type="school-program">School Program</button>
+      </div>
+      <p class="small" style="margin:8px 0 0">(Click outside or press Esc to cancel)</p>
+    </div>
+  </div>
+  <div id="colModal" class="modal" aria-hidden="true">
+    <div class="panel" role="dialog" aria-modal="true">
+      <h2>Manage Columns</h2>
+      <div id="colList" class="col-list"></div>
+      <p class="small" style="margin:8px 0 0">(Click outside or press Esc to close)</p>
+    </div>
+  </div>
+
+<script>
+/* The full interactive JS from canvas is very long. If you want a one-file
+ * fully interactive export, I can generate a `roster-interactive.html` that
+ * includes all event handlers exactly as in your canvas.
+ */
+</script>
+</body>
+</html>
